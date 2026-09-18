@@ -28,8 +28,9 @@
 Lancer le détecteur adapté (scripts fournis, lecture seule) :
 - Windows : `detect-polinrider-windows.ps1`
 - Linux / macOS : `detect-polinrider-unix.sh`
+- Dossiers de projets (tout OS) : `python3 detect/scan-workspace.py <dossier>` (`fichier:ligne`, HAUT/MOYEN)
 
-Indicateurs (du plus fiable au moins) : `temp_auto_push.bat` · `branch_structure.json` · `.vscode/tasks.json` avec `runOn: folderOpen` · **fichier de police** (`.woff2`, `.woff`, `.ttf`, `.otf`, `.eot`) dont le **contenu** n'est pas une vraie police (détecter par la signature binaire, PAS par le nom — le nom varie : `fa-solid-400`, `fa-solid-500`, etc.) · ligne de ~32 000 caractères dans un `*.config.*` (ex. `vite.config.js`) · marqueurs `rmcej%otb%`, `Cot%3t=shtP`, `_$_1e42`, `global['_V']`, `global['!']` · paquets npm `tailwindcss-style-animate` & co. · commits force-push réécrits gardant date/message d'origine.
+Indicateurs (du plus fiable au moins) : `temp_auto_push.bat` · `branch_structure.json` · `.vscode/tasks.json` avec `runOn: folderOpen` · **fichier de police** (`.woff2`, `.woff`, `.ttf`, `.otf`, `.eot`) dont le **contenu** n'est pas une vraie police (détecter par la signature binaire, PAS par le nom — le nom varie : `fa-solid-400`, `fa-solid-500`, etc.) · **charge ajoutée à la fin d'une config après un bourrage d'espaces** (cible n°1 `postcss.config.mjs`, puis `tailwind`/`eslint`/`next`/`vite`/`webpack.config.*`…) ou ligne ≥ 1 000 caractères · marqueurs `rmcej%otb%`, `Cot%3t=shtP`, `_$_1e42`, `MDy(`, `global['_V']`, `global['!']`, clés XOR, adresses TRON/Aptos · paquets npm `tailwindcss-style-animate` & co. (y compris dans les lockfiles) · C2 `*.vercel.app` · `npm/lib/cli.js` de ~1 Mo. Liste complète : `docs/indicators-of-compromise.md`. · commits force-push réécrits gardant date/message d'origine.
 
 > **Note détection police :** ne jamais filtrer sur le nom du fichier — l'attaquant le change (aujourd'hui `fa-solid-500.woff2`, hier `fa-solid-400.woff2`). Vérifier la signature binaire de *chaque* fichier de police, et signaler tout fichier de police contenant du JavaScript.
 
@@ -76,7 +77,7 @@ Serveur par serveur, production d'abord. Accès via la **console du fournisseur*
 ## Étape 6 — Dépôts Git
 
 - [ ] Cloner en miroir tous les dépôts et scanner (mêmes IoC) **avant** de les ouvrir.
-- [ ] Nettoyer les fichiers injectés (`tasks.json`, faux `.woff2`, `branch_structure.json`, config avec ligne géante), régénérer les lockfiles.
+- [ ] Nettoyer les fichiers injectés (`tasks.json`, faux `.woff2`, `branch_structure.json`, config avec charge après bourrage d'espaces ou ligne géante, `spellright.dict`), régénérer les lockfiles.
 - [ ] Force-push la correction → réactiver la protection de branche → exiger les **commits signés**.
 - [ ] Faire tourner tous les secrets présents dans les builds CI de chaque dépôt.
 - [ ] Ajouter un scan IoC dans la CI. **Re-scanner chaque semaine pendant 1 mois** (la ré-infection est documentée).
