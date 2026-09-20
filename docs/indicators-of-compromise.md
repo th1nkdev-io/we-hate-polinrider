@@ -6,7 +6,11 @@
 
 Détecteurs fournis (lecture seule) :
 - `detect/scan-workspace.py` : scanner multiplateforme d'un dossier de travail, avec résultats `fichier:ligne` triés HAUT/MOYEN et lecture du reflog git ;
-- `detect/detect-polinrider-unix.sh` et `detect/detect-polinrider-windows.ps1` : scan de la machine, avec en plus les processus et la persistance.
+- `detect/scan-git-history.py` : mêmes règles, mais sur **tous les commits de toutes les refs** (branches, `refs/pull/*` d'un clone `--mirror`) : un working tree propre ne prouve rien ;
+- `detect/detect-polinrider-unix.sh` et `detect/detect-polinrider-windows.ps1` : scan de la machine, avec en plus les processus et la persistance ;
+- `detect/triage-suspects.py` et `detect/inspect-repo-vectors.sh` : montrent la **preuve** (contenu tronqué et assaini) pour trancher entre infection et faux positif.
+
+Le nettoyage du working tree est dans `clean/polinrider-clean.py` (simulation par défaut, quarantaine réversible).
 
 Niveaux : **HAUT** = propre à la charge, considérer le dépôt/la machine comme compromis. **MOYEN** = parfois légitime, lire le fichier avant de conclure.
 
@@ -38,6 +42,17 @@ Heuristiques de contenu :
 - **Ligne anormalement longue** : **≥ 1 000 caractères** dans un fichier de config (les premières variantes montaient à ~32 000). **HAUT**.
 - **Taille** : une config saine fait **~80–200 octets**, une config infectée **~5 000 octets**. Au-delà de 3 000 octets : **MOYEN**, à relire.
 
+> **Faux positif classique.** Un vide de 30 à 99 espaces n'est retenu que s'il est **suivi de code** : de l'ASCII art ou un alignement dans un commentaire n'est pas du bourrage. Le vrai bourrage fait des **centaines** d'espaces, donc ≥ 100 espaces + du code reste toujours suspect.
+
+### Variante `global.i` (septembre 2026)
+
+Même principe (charge collée à la fin d'une config), avec :
+- un bourrage plus long, **~500 espaces** (et non ~280) ;
+- la signature `global.i = 'A10-*40840'`, où **`A10-*40840` est un identifiant de campagne** ;
+- puis du code obfusqué (`_0x1574`, …) qui se termine par `run();`.
+
+Elle cible les mêmes fichiers, avec `eslint.config.*` très fréquent. Ne pas se fier au nombre exact d'espaces : chercher le contenu (`global.i`, `A10-`, `run();` après un vide).
+
 Pour le voir soi-même sans rien exécuter :
 ```bash
 grep -nE '^ {100,}[^ ]|[^ ] {30,}[^ ]|.{1000}' postcss.config.mjs | cut -c1-120   # n° de ligne + début
@@ -53,6 +68,7 @@ Chercher dans **tous** les fichiers texte, pas seulement les `*.js` : la charge 
 | Signature | `rmcej%otb%` | `Cot%3t=shtP` |
 | Fonction de décodage | `_$_1e42` | `MDy` (chercher `MDy(`) |
 | Injection globale | `global['!']` (+ `global['r']`, `global['m']`) | `global['_V']='8-stN'` (tags `8-st1` … `8-st59`+) |
+| Variante `global.i` (sept. 2026) | — | `global.i = 'A10-*40840'` puis `_0x…` … `run();` |
 | Graines d'obfuscation (MOYEN) | `2857687`, `2667686` | `1111436`, `3896884` |
 
 Clés XOR (déchiffrement de la charge) :
@@ -75,6 +91,8 @@ e9b53a7c-2342-4b15-b02d-bd8b8f6a03f9
 ```
 
 > ⚠️ Un fichier légitime qui **cite** ces marqueurs (article, ce dépôt, un autre outil de détection) déclenchera un faux positif. Les détecteurs ignorent leurs propres fichiers ; pour le reste, **lire le fichier** avant de conclure.
+>
+> **Gardes défensives.** Un `.github/workflows/security-guard.yml` (ou `security-guard.*`) qui contient ces signatures est en général une **garde légitime** : elle porte ce qu'elle traque. `scan-workspace.py` rétrograde ses marqueurs en **MOYEN** avec une note ; le nettoyeur n'y touche pas. Ne pas la supprimer d'office, mais la **lire** : un nom de fichier ne prouve rien.
 
 ## 3. Réseau / C2
 
@@ -145,6 +163,9 @@ bsc-dataseed.binance.org  bsc-rpc.publicnode.com
   - `"command"` qui lance `node` (HAUT si combiné à `folderOpen`, MOYEN seul), en particulier sur une police : `node ./public/fonts/fa-solid-400.woff2` ;
   - `curl … | bash` vers un endpoint Vercel ci-dessus ;
   - l'UUID StakingGame `e9b53a7c-2342-4b15-b02d-bd8b8f6a03f9`.
+- `.vscode/settings.json` : **relance la charge même si `tasks.json` a été supprimé**. Deux clés à chercher :
+  - `"task.allowAutomaticTasks": true` (supprime le garde-fou de VS Code) : **MOYEN** seule ;
+  - un bloc `"tasks"` avec `"runOn": "folderOpen"` (souvent avec `terminal.integrated.hideOnStartup`) : **HAUT**.
 - **`npm/lib/cli.js` réécrit** : le fichier légitime fait quelques centaines d'octets sur 4 lignes. Le fichier piégé fait **~1 Mo**, avec la charge ajoutée après du blanc à partir de la ligne 5. Chaque appel à `npm` relance alors la charge.
 - Antivirus : Microsoft Defender détecte `Trojan:JS/PolinRider.DB!MTB`.
 
@@ -154,6 +175,13 @@ bsc-dataseed.binance.org  bsc-rpc.publicnode.com
 - Traces locales : `git reflog` montre des entrées `commit (amend)` que tu n'as pas faites. Dans `.git/logs/HEAD`, les **horodatages reculent** (horloge falsifiée).
 - Traces GitHub : « *[user] force pushed the branch* » dans l'activité, commits **Unverified** alors que tu signes d'habitude.
 - `pull` ou déploiements CI inattendus apparaissant du jour au lendemain sur tous les dépôts.
+
+**Un working tree propre ne prouve rien.** Un commit « remove virus » retire souvent le déclencheur (`tasks.json`) mais laisse le **payload** (fausse police, config) dans un commit ancien, une autre branche ou `refs/pull/*`. Et GitHub sert les anciens commits par SHA même après un force-push. Toujours analyser **tous les commits de toutes les refs** :
+```bash
+git clone --mirror <url> depot.git          # dans un dossier de travail jetable, jamais dans le clone
+python3 detect/scan-git-history.py depot.git
+```
+Le *security log* de compte GitHub **ne trace pas les `git push` individuels** : « compte non compromis » ne veut pas dire « dépôts non infectés ».
 
 Vérification manuelle (lecture seule) :
 ```bash
