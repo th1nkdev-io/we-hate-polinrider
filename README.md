@@ -2,7 +2,7 @@
 
 Boîte à outils et méthode pour **détecter, contenir et se remettre** d'une compromission par **PolinRider** — une campagne de supply-chain (attribuée à l'acteur nord-coréen Lazarus) qui vole identifiants, cookies de session et wallets, et se propage via GitHub en utilisant *tes* identifiants Git.
 
-Tous les scripts sont **auditables** et, pour les détecteurs et l'audit serveur, **en lecture seule** : ils ne suppriment ni ne modifient rien. Lis le code avant de l'exécuter.
+Tous les scripts sont **auditables** et, pour les détecteurs et l'audit serveur, **en lecture seule** : ils ne suppriment ni ne modifient rien. Les rares scripts qui écrivent (`clean/`, `recover/commit-cleaned.sh`, `recover/push-recovered.sh`, `recover/recover-local-bundles.sh`, `rescue/restore-rescue.py`) sont en **simulation par défaut** ; `clean/` copie chaque fichier en quarantaine avant d'agir. Lis le code avant de l'exécuter.
 
 ## ⚠️ Nouvelle variante : charge cachée par « bourrage d'espaces » dans les configs
 
@@ -11,6 +11,7 @@ Les premiers détecteurs cherchaient surtout ESLint et une ligne de ~32 000 cara
 - **Cible n°1 : `postcss.config.mjs` (~62 %)**, puis `tailwind.config.*`, `eslint.config.*`/`.eslintrc.*`, `next.config.*`, `vite.config.*`, `webpack.config.*`, `astro`/`nuxt`/`svelte`/`rollup`/`babel`/`vue`/`gridsome`/`truffle`, et les fichiers d'entrée `App.js`/`index.js`. Liste complète : [`docs/indicators-of-compromise.md`](docs/indicators-of-compromise.md).
 - Une config saine fait ~80–200 octets, une config infectée ~5 000.
 - Les signatures ont **tourné** en juillet 2026 : `Cot%3t=shtP` et le décodeur `MDy` s'ajoutent à `rmcej%otb%` et `_$_1e42`.
+- **Variante `global.i` (sept. 2026)** : bourrage de **~500 espaces**, signature `global.i = 'A10-*40840'` (`A10-*40840` = identifiant de campagne), code `_0x…` terminé par `run();`. Elle s'accompagne d'un `.vscode/settings.json` (`task.allowAutomaticTasks` + tâche `folderOpen`) qui **relance la charge même si `tasks.json` est supprimé**.
 - La détection se fait **par le contenu** (bourrage d'espaces, marqueurs, signatures binaires), jamais par le nom de fichier.
 
 **Scan rapide d'un dossier de travail** (Python 3, Linux/macOS/Windows, lecture seule, aucun sous-processus) :
@@ -35,10 +36,18 @@ Sortie `fichier:ligne` triée **HAUT / MOYEN**. Code de sortie : 2 = HAUT, 1 = M
 docs/
   playbook.md                       Procédure d'éradication complète en 8 étapes
   indicators-of-compromise.md       Liste exhaustive des IoC (détecter par le CONTENU, pas le nom)
+  prompt-nettoyage-depot.md         Prompt Claude Code : nettoyer un dépôt infecté (historique réécrit, dépôt neuf)
+  modele-notification.md            Modèle de message aux clients / collaborateurs (RGPD 72 h)
 detect/
   scan-workspace.py                 Scanner Python multiplateforme d'un dossier de projets (lecture seule)
+  scan-git-history.py               Même règles sur TOUT l'historique git, toutes les refs (lecture seule)
   detect-polinrider-unix.sh         Détecteur Linux + macOS (lecture seule)
   detect-polinrider-windows.ps1     Détecteur Windows (lecture seule)
+  triage-suspects.py                Montre la preuve : infection réelle ou faux positif (lecture seule)
+  inspect-repo-vectors.sh           Affiche settings.json, workflows, security-guard, IoC d'un dépôt (lecture seule)
+clean/                              Nettoyer le working tree (simulation par défaut, quarantaine réversible)
+  polinrider-clean.py                   Tronque les configs injectées, supprime fausses polices / tasks.json / IoC,
+                                        retire les clés d'auto-exécution de settings.json
 inventory/                          AVANT le wipe : savoir quoi faire tourner
   inventory-accounts-windows.ps1        Inventorie les comptes/identifiants du navigateur
   inventory-project-secrets-windows.ps1 Liste les noms de variables .env par projet
@@ -46,23 +55,29 @@ rescue/                             Sauver le travail non poussé, puis le resta
   triage-projects-windows.ps1           Trie les dépôts (propres / à vérifier)
   rescue-slim-windows.ps1               Crée des bundles légers du travail non poussé
   restore-rescue.py                     Rebranche ces bundles sur des clones frais
+  diag-repo.sh                          « Où est passé mon travail ? » : RESCUE, reflog, autres copies (lecture seule)
 recover/                            Rebâtir sur la machine propre
   sync-repos.sh                         Reclone en masse tous tes dépôts depuis GitHub
+  recover-local-bundles.sh              Reconstruit des projets purement locaux depuis leurs bundles RESCUE
+  commit-cleaned.sh                     Commit du nettoyage dans une liste de dépôts (simulation par défaut)
+  push-recovered.sh                     Crée des dépôts privés et pousse les projets récupérés (simulation par défaut)
 server/
   audit-server.sh                       Audit de persistance d'un VPS (lecture seule)
+  audit-vps-hardening.sh                Audit de posture : SSH, pare-feu, fail2ban, ports, Docker, comptes (lecture seule)
 ```
 
 ## Ordre d'utilisation (résumé)
 
 1. **Confiner** la machine infectée (fermer les IDE, couper le C2 — voir `docs/playbook.md`).
-2. **Détecter** : `detect/scan-workspace.py` sur tes dossiers de projets, puis le script `detect/` adapté à l'OS (processus, persistance).
+2. **Détecter** : `detect/scan-workspace.py` sur tes dossiers de projets, `detect/scan-git-history.py --root …` pour l'**historique** (un working tree propre ne prouve rien), puis le script `detect/` adapté à l'OS (processus, persistance).
 3. **Inventorier** (`inventory/`) ce qui a pu fuir, pour préparer la rotation des secrets.
 4. **Sauver** le code non poussé (`rescue/`) — sans jamais l'ouvrir dans un IDE ni `npm install` avant nettoyage.
 5. **Révoquer** depuis une machine SAINE, dans l'ordre : email → gestionnaire de mots de passe → GitHub → registrar/DNS → cloud → registries → paiements (voir le playbook).
 6. **Réinstaller** la machine infectée, puis **durcir** : `npm config set ignore-scripts true`, VS Code `security.workspace.trust.enabled=true` et `task.allowAutomaticTasks=off`.
-7. **Rebâtir** (`recover/sync-repos.sh`) puis **restaurer** le travail non poussé (`rescue/restore-rescue.py`).
-8. **Auditer les serveurs** (`server/audit-server.sh`) et faire tourner tous leurs secrets.
-9. **Surveiller** 30 jours (re-scan hebdo, revue du security log GitHub).
+7. **Nettoyer** les dépôts : working tree avec `clean/polinrider-clean.py` (simulation, puis `--apply`) ; historique déjà poussé → réécriture + **dépôt neuf**, pas un simple force-push (`docs/prompt-nettoyage-depot.md`).
+8. **Rebâtir** (`recover/sync-repos.sh`) puis **restaurer** le travail non poussé (`rescue/restore-rescue.py`, `recover/recover-local-bundles.sh`).
+9. **Auditer et durcir les serveurs** (`server/audit-server.sh`, `server/audit-vps-hardening.sh`) et faire tourner tous leurs secrets.
+10. **Surveiller** 30 jours (re-scan hebdo, revue du security log GitHub).
 
 Le détail complet est dans **`docs/playbook.md`**.
 

@@ -4,6 +4,8 @@
 **Principe directeur :** on coupe les accès depuis une machine SAINE, on éradique sur les machines infectées, on fait tourner tous les secrets, puis on restaure. **Jamais l'inverse.**
 
 > PolinRider est une campagne de supply-chain attribuée à un acteur nord-coréen (Lazarus). Elle vole les identifiants, cookies de session et wallets, et se propage via GitHub en utilisant *vos* identifiants Git. Un simple nettoyage ne suffit pas : le malware se ré-injecte. Traitez toute machine touchée comme entièrement compromise.
+>
+> **Vecteur d'entrée typique :** un dépôt reçu d'un « recruteur » (faux test technique) ou un paquet npm typosquatté. L'ouverture du dossier dans l'IDE (`runOn: folderOpen`) ou un simple `npm run dev` / `eslint` (config piégée) suffit à exécuter la charge.
 
 ---
 
@@ -29,8 +31,10 @@ Lancer le détecteur adapté (scripts fournis, lecture seule) :
 - Windows : `detect-polinrider-windows.ps1`
 - Linux / macOS : `detect-polinrider-unix.sh`
 - Dossiers de projets (tout OS) : `python3 detect/scan-workspace.py <dossier>` (`fichier:ligne`, HAUT/MOYEN)
+- **Historique git** (toutes les refs) : `python3 detect/scan-git-history.py --root <dossier>` — un working tree propre ne prouve rien (voir étape 6).
+- Trancher un doute : `python3 detect/triage-suspects.py <fichier>:<ligne>` et `bash detect/inspect-repo-vectors.sh <dépôt>` (montrent la preuve, n'exécutent rien). Les `security-guard.*` qui citent des signatures sont des gardes défensives : à lire, pas à supprimer d'office.
 
-Indicateurs (du plus fiable au moins) : `temp_auto_push.bat` · `branch_structure.json` · `.vscode/tasks.json` avec `runOn: folderOpen` · **fichier de police** (`.woff2`, `.woff`, `.ttf`, `.otf`, `.eot`) dont le **contenu** n'est pas une vraie police (détecter par la signature binaire, PAS par le nom — le nom varie : `fa-solid-400`, `fa-solid-500`, etc.) · **charge ajoutée à la fin d'une config après un bourrage d'espaces** (cible n°1 `postcss.config.mjs`, puis `tailwind`/`eslint`/`next`/`vite`/`webpack.config.*`…) ou ligne ≥ 1 000 caractères · marqueurs `rmcej%otb%`, `Cot%3t=shtP`, `_$_1e42`, `MDy(`, `global['_V']`, `global['!']`, clés XOR, adresses TRON/Aptos · paquets npm `tailwindcss-style-animate` & co. (y compris dans les lockfiles) · C2 `*.vercel.app` · `npm/lib/cli.js` de ~1 Mo. Liste complète : `docs/indicators-of-compromise.md`. · commits force-push réécrits gardant date/message d'origine.
+Indicateurs (du plus fiable au moins) : `temp_auto_push.bat` · `branch_structure.json` · `.vscode/tasks.json` avec `runOn: folderOpen` · **fichier de police** (`.woff2`, `.woff`, `.ttf`, `.otf`, `.eot`) dont le **contenu** n'est pas une vraie police (détecter par la signature binaire, PAS par le nom — le nom varie : `fa-solid-400`, `fa-solid-500`, etc.) · **charge ajoutée à la fin d'une config après un bourrage d'espaces** (cible n°1 `postcss.config.mjs`, puis `tailwind`/`eslint`/`next`/`vite`/`webpack.config.*`…) ou ligne ≥ 1 000 caractères · `.vscode/settings.json` avec `task.allowAutomaticTasks` ou une tâche `folderOpen` (survit à la suppression de `tasks.json`) · marqueurs `rmcej%otb%`, `Cot%3t=shtP`, `_$_1e42`, `MDy(`, `global['_V']`, `global['!']`, `global.i = 'A10-*40840'` (variante sept. 2026, bourrage ~500 espaces), clés XOR, adresses TRON/Aptos · paquets npm `tailwindcss-style-animate` & co. (y compris dans les lockfiles) · C2 `*.vercel.app` · `npm/lib/cli.js` de ~1 Mo. Liste complète : `docs/indicators-of-compromise.md`. · commits force-push réécrits gardant date/message d'origine.
 
 > **Note détection police :** ne jamais filtrer sur le nom du fichier — l'attaquant le change (aujourd'hui `fa-solid-500.woff2`, hier `fa-solid-400.woff2`). Vérifier la signature binaire de *chaque* fichier de police, et signaler tout fichier de police contenant du JavaScript.
 
@@ -53,7 +57,7 @@ L'ordre compte : l'email est la racine de récupération de tout le reste.
 
 - [ ] Prévenir les collaborateurs et clients dont un accès, un dépôt ou un serveur a pu être touché.
 - [ ] Si des **données personnelles** sont concernées : évaluer l'obligation RGPD (notification sous 72 h). Le sous-traitant prévient le responsable de traitement sans délai.
-- [ ] Message factuel : ce qui s'est passé, période concernée, ce que le destinataire doit vérifier/révoquer de son côté.
+- [ ] Message factuel : ce qui s'est passé, période concernée, ce que le destinataire doit vérifier/révoquer de son côté. Modèle : [`modele-notification.md`](modele-notification.md). Envoyer depuis une adresse propre, pas depuis une session existante sur la machine infectée.
 
 ## Étape 4 — Serveurs / VPS (depuis la machine saine, nouvelle clé SSH)
 
@@ -66,19 +70,21 @@ Serveur par serveur, production d'abord. Accès via la **console du fournisseur*
 - [ ] **Décision** : IoC trouvé, clé/compte inconnu, ou données clients → **réinstallation complète**. Sinon nettoyage + surveillance.
 - [ ] Faire tourner **tous** les secrets serveur : mots de passe DB, `.env` (clés API, secrets JWT/session, webhooks), certificats/clés TLS stockés, clés de déploiement, identifiants SMTP. Changer le secret de session invalide toutes les sessions applicatives.
 - [ ] Bloquer les domaines C2 au pare-feu ; surveiller les logs SSH.
+- [ ] **Durcir** (après avoir repris le contrôle) : `bash server/audit-vps-hardening.sh` (lecture seule, à lancer *sur* le serveur) donne l'état de SSH, pare-feu, fail2ban, ports, Docker, comptes. Cible : SSH par **clé uniquement** (`PasswordAuthentication no`, `PermitRootLogin prohibit-password`), nouvelle clé ed25519, ports Docker non exposés à Internet (`ufw-docker` : `ufw` seul ne filtre pas les ports publiés par Docker), `fail2ban`, `unattended-upgrades`, socket Docker jamais en TCP, comptes de service hors `sudo` et en `nologin`, **clé de déploiement CI dédiée** (recréée : l'ancienne était sur la machine infectée). Après un `apt upgrade` + reboot, vérifier que les conteneurs redémarrent (les droits sur les volumes montés sont un piège classique).
 
 ## Étape 5 — Machines infectées : réinstallation
 
 1. **Avant le wipe** (hors ligne) : relever les traces (extensions IDE, tâches planifiées, historique shell), copier **uniquement des données inertes** (documents, images, dumps SQL) sur un support neuf, extraire la **liste des services** mentionnés dans les notes/`.env` pour la rotation. Jamais : exécutables, `node_modules`, profils navigateur, `.ssh`, `.npmrc`, config à secrets.
 2. **Sauver le code non poussé** : copier les dépôts **sans `node_modules`** (mais avec le `.git`) sur clé USB → scanner/nettoyer sur une machine saine → **jamais** ouvrir dans un IDE ni `npm install` avant nettoyage.
 3. **Réinstaller le système** (formatage complet).
-4. **Durcir** avant de reprendre : `security.workspace.trust.enabled=true`, `task.allowAutomaticTasks=off`, `npm config set ignore-scripts true`, extensions IDE en installation manuelle, ne jamais ouvrir un dépôt non vérifié directement dans l'IDE.
+4. **Durcir** avant de reprendre : `security.workspace.trust.enabled=true`, `task.allowAutomaticTasks=off`, `npm config set ignore-scripts true`, extensions IDE en installation manuelle, ne jamais ouvrir un dépôt non vérifié directement dans l'IDE. Réglages VS Code/Cursor supplémentaires : `"extensions.autoUpdate": false`, `"extensions.autoCheckUpdates": false`, `"terminal.integrated.allowWorkspaceConfiguration": false`.
 
 ## Étape 6 — Dépôts Git
 
-- [ ] Cloner en miroir tous les dépôts et scanner (mêmes IoC) **avant** de les ouvrir.
-- [ ] Nettoyer les fichiers injectés (`tasks.json`, faux `.woff2`, `branch_structure.json`, config avec charge après bourrage d'espaces ou ligne géante, `spellright.dict`), régénérer les lockfiles.
-- [ ] Force-push la correction → réactiver la protection de branche → exiger les **commits signés**.
+- [ ] Cloner en miroir tous les dépôts (`git clone --mirror`) et scanner (mêmes IoC) **avant** de les ouvrir. **Working tree ET historique** : `detect/scan-workspace.py` + `detect/scan-git-history.py`. Le *security log* de GitHub ne trace pas les `git push` : « compte non compromis » ≠ « dépôts non infectés ». HEAD propre ≠ historique propre (un « remove virus » laisse souvent le payload dans un ancien commit).
+- [ ] Nettoyer le working tree : `python3 clean/polinrider-clean.py <dossier>` (simulation), relire, puis `--apply` (quarantaine réversible dans `~/_polinrider_quarantine/`). Il traite les configs injectées, fausses polices, `tasks.json`/`settings.json`, fichiers IoC ; paquets npm et marqueurs restent « à revoir » à la main. Régénérer les lockfiles.
+- [ ] Ne pas se contenter d'un force-push : GitHub garde les anciens commits accessibles par SHA et `refs/pull/*` ne se supprime pas. Réécrire l'historique (`git filter-repo`), publier dans un **dépôt neuf**, renommer l'ancien en `<nom>-infecte`, puis le supprimer soi-même après vérification. Procédure guidée : [`prompt-nettoyage-depot.md`](prompt-nettoyage-depot.md). `recover/commit-cleaned.sh` ne convient qu'à un dépôt dont l'historique est **déjà** sain (il ne nettoie que le dernier commit).
+- [ ] Réactiver la protection de branche sur le nouveau dépôt → exiger les **commits signés**.
 - [ ] Faire tourner tous les secrets présents dans les builds CI de chaque dépôt.
 - [ ] Ajouter un scan IoC dans la CI. **Re-scanner chaque semaine pendant 1 mois** (la ré-infection est documentée).
 
