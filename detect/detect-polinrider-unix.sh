@@ -58,6 +58,7 @@ HIGH_MARKERS=(
   '0xbe037400670fbf1c32364f762975908dc43eeb38759263e7dfcdabc76380811e'       # Aptos
   '0x3f0e5781d0855fb460661ac63257376db1941b2bb522499e4757ecb3ebd5dce3'       # Aptos
   'e9b53a7c-2342-4b15-b02d-bd8b8f6a03f9'           # UUID template StakingGame
+  'A10-*40840'                                     # id de campagne, variante « global.i » (sept. 2026)
   'default-configuration.vercel.app' '260120.vercel.app'
   'vscode-settings-bootstrap.vercel.app' 'vscode-settings-config.vercel.app'
   'vscode-bootstrapper.vercel.app' 'vscode-load-config.vercel.app')
@@ -159,6 +160,17 @@ while IFS= read -r f; do
     [ "$fo" -eq 1 ] && hit "tasks.json lance node a l'ouverture : $f" || warn "tasks.json lance node : $f"
   fi
 done < <(ff -path '*/.vscode/tasks.json')
+
+# --- 7b. .vscode/settings.json : auto-execution qui survit a la suppression de tasks.json ---
+section "7b. .vscode/settings.json (task.allowAutomaticTasks + tasks folderOpen)"
+while IFS= read -r f; do
+  aat=0; grep -qE '"task\.allowAutomaticTasks" *: *(true|"on")' "$f" 2>/dev/null && aat=1
+  if grep -qi 'folderOpen' "$f" 2>/dev/null; then
+    hit "settings.json contient une tache runOn: folderOpen : $f"
+  elif [ "$aat" -eq 1 ]; then
+    warn "settings.json : task.allowAutomaticTasks actif (supprime le garde-fou de VS Code) : $f"
+  fi
+done < <(ff -path '*/.vscode/settings.json')
 
 # --- 8. npm/lib/cli.js reecrit (~1 Mo au lieu de quelques centaines d'octets) ---
 section "8. npm/lib/cli.js global"

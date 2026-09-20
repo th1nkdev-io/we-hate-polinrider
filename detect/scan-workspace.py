@@ -23,7 +23,7 @@ Detecte (voir docs/indicators-of-compromise.md) :
   - paquets npm pieges dans package.json / lockfiles / node_modules ;
   - fausses polices (verifiees par signature binaire, jamais par le nom) ;
   - fichiers IoC (temp_auto_push.bat, config.bat, branch_structure.json, spellright.dict) ;
-  - .vscode/tasks.json auto-executant ; npm/lib/cli.js reecrit ;
+  - .vscode/tasks.json et .vscode/settings.json auto-executants ; npm/lib/cli.js reecrit ;
   - commits amendes / horloge falsifiee dans le reflog git.
 
 Script auditable : lisez-le avant de l'executer.
@@ -71,6 +71,7 @@ HIGH_MARKERS = [
     ("adresse Aptos C2", "0xbe037400670fbf1c32364f762975908dc43eeb38759263e7dfcdabc76380811e"),
     ("adresse Aptos C2", "0x3f0e5781d0855fb460661ac63257376db1941b2bb522499e4757ecb3ebd5dce3"),
     ("UUID template StakingGame", "e9b53a7c-2342-4b15-b02d-bd8b8f6a03f9"),
+    ("id de campagne, variante global.i (sept. 2026)", "A10-*40840"),
     ("C2 Vercel", "default-configuration.vercel.app"),
     ("C2 Vercel", "260120.vercel.app"),
     ("C2 Vercel", "vscode-settings-bootstrap.vercel.app"),
@@ -79,6 +80,8 @@ HIGH_MARKERS = [
     ("C2 Vercel", "vscode-load-config.vercel.app"),
 ]
 HIGH_REGEXES = [
+    ("variante global.i : global.i = 'A<n>-…' (id de campagne)",
+     re.compile(rb"""global\.i\s*=\s*['"]A\d+-""")),
     ("tag de version de la charge (global['_V']='8-stN')",
      re.compile(rb"""global\[\s*['"]_V['"]\s*\]\s*=\s*['"]8-st\d+""")),
     ("URL C2 Vercel /settings/<os>?flag=",
@@ -120,6 +123,7 @@ EXCLUDED_DIRS = {"node_modules", ".git", "dist", "build", "out", ".next", ".nuxt
 CODE_EXTS = {".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx", ".vue", ".svelte",
              ".astro", ".json", ".dict", ".bat", ".cmd", ".ps1", ".sh"} | FONT_EXTS
 
+CODE_CHARS = re.compile(r"[;(){}=]|=>")   # un vide de 30-99 espaces n'est suspect que suivi de code
 LEAD_PAD = 100      # espaces en tête de ligne
 MID_PAD = 30        # espaces au milieu (code ... vide ... code)
 LONG_LINE = 1000    # longueur de ligne anormale dans une config
@@ -165,15 +169,24 @@ def read_bytes(path, limit):
 
 
 # -------------------------------------------------------------------- contrôles
+def is_guard(path):
+    """Garde defensive (ex. .github/workflows/security-guard.yml) : elle CONTIENT les signatures
+    qu'elle traque. Ses marqueurs sont rétrogradés en MOYEN, pas ignorés (un nom ne prouve rien)."""
+    return "security-guard" in path.name.lower()
+
+
 def check_strings(rep, path, data, sensitive):
+    guard = is_guard(path)
+    note = " [garde defensive probable : security-guard*, a relire, ne PAS supprimer d'office]"
     for label, needle in HIGH_MARKERS:
         i = data.find(needle.encode())
         if i != -1:
-            rep.add(HIGH, path, line_of(data, i), f"{label} : {needle}")
+            rep.add(MED if guard else HIGH, path, line_of(data, i),
+                    f"{label} : {needle}" + (note if guard else ""))
     for label, rx in HIGH_REGEXES:
         m = rx.search(data)
         if m:
-            rep.add(HIGH, path, line_of(data, m.start()), label)
+            rep.add(MED if guard else HIGH, path, line_of(data, m.start()), label + (note if guard else ""))
     for label, needle in MED_MARKERS:
         i = data.find(needle.encode())
         if i != -1:
@@ -219,6 +232,10 @@ def check_padding(rep, path, data, target, min_tail=20):
             m = PAD_RE.search(line)
             if m:
                 tail, kind, gap = line[m.end(1):], "au milieu", len(m.group(1))
+        # Le vrai bourrage fait des centaines d'espaces. Un vide plus court suivi de texte sans code
+        # (ASCII art, alignement dans un commentaire ou une chaîne) est un faux positif.
+        if tail is not None and gap < LEAD_PAD and not CODE_CHARS.search(tail):
+            tail = None
         if tail is not None and not is_comment(tail):
             if target and len(tail.strip()) >= min_tail:
                 rep.add(HIGH, path, n, f"bourrage de {gap} espaces {kind} puis code "
@@ -260,6 +277,19 @@ def check_tasks_json(rep, path, data):
     m = re.search(rb"(?:curl|wget)[^\n|]*\|\s*(?:ba|z)?sh\b", data)
     if m:
         rep.add(HIGH, path, line_of(data, m.start()), "tasks.json : curl|bash")
+
+
+def check_settings_json(rep, path, data):
+    """.vscode/settings.json : relance la charge a l'ouverture du dossier meme si tasks.json est supprime."""
+    low = data.lower()
+    if b"folderopen" in low:
+        rep.add(HIGH, path, line_of(data, low.find(b"folderopen")),
+                "settings.json contient une tache runOn: folderOpen (auto-execution)")
+    else:
+        m = re.search(rb'"task\.allowAutomaticTasks"\s*:\s*(?:true|"on")', data)
+        if m:
+            rep.add(MED, path, line_of(data, m.start()),
+                    "task.allowAutomaticTasks actif : supprime le garde-fou de VS Code")
 
 
 def check_ioc_file(rep, path, data):
@@ -399,6 +429,7 @@ def scan(root, deep, max_size, self_root):
             is_entry = name in ENTRY_TARGETS
             is_font = ext in FONT_EXTS
             is_tasks = name == "tasks.json" and d.name == ".vscode"
+            is_settings = name == "settings.json" and d.name == ".vscode"
 
             if size > max_size and not is_font:
                 stats["ignores_taille"] += 1
@@ -419,12 +450,14 @@ def scan(root, deep, max_size, self_root):
                 continue  # binaire
 
             if not in_self(p):
-                check_strings(rep, p, data, sensitive=is_target or is_entry or is_tasks)
+                check_strings(rep, p, data, sensitive=is_target or is_entry or is_tasks or is_settings)
             if name in PKG_FILES:
                 for m in PKG_RE.finditer(data):
                     rep.add(HIGH, p, line_of(data, m.start()), f"paquet npm piege : {m.group(1).decode()}")
             if is_tasks:
                 check_tasks_json(rep, p, data)
+            if is_settings:
+                check_settings_json(rep, p, data)
             if is_target and size >= BIG_CONFIG:
                 rep.add(MED, p, None, f"config de {size} octets (saine ~80-200, infectee ~5000) — a relire")
             if ext in CODE_EXTS and not name.endswith((".min.js", ".min.mjs")) and name not in PKG_FILES:

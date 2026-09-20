@@ -51,6 +51,7 @@ $highMarkers = @(
   '0xbe037400670fbf1c32364f762975908dc43eeb38759263e7dfcdabc76380811e',        # Aptos
   '0x3f0e5781d0855fb460661ac63257376db1941b2bb522499e4757ecb3ebd5dce3',        # Aptos
   'e9b53a7c-2342-4b15-b02d-bd8b8f6a03f9',           # UUID template StakingGame
+  'A10-*40840',                                     # id de campagne, variante « global.i » (sept. 2026)
   'default-configuration.vercel.app','260120.vercel.app',
   'vscode-settings-bootstrap.vercel.app','vscode-settings-config.vercel.app',
   'vscode-bootstrapper.vercel.app','vscode-load-config.vercel.app')
@@ -213,6 +214,14 @@ foreach ($f in $files) {
   if ($t -match 'node\s+[^\s"'']+\.(woff2?|ttf|otf|eot|dict)\b') { Hit "tasks.json execute une police/dict avec node : $f" }
   if ($t -match '(curl|wget)[^|\n]*\|\s*(ba|z)?sh\b') { Hit "tasks.json curl|bash : $f" }
   if ($t -match '"command"\s*:\s*"[^"]*\bnode\b') { if ($fo) { Hit "tasks.json lance node a l'ouverture : $f" } else { Warn "tasks.json lance node : $f" } }
+}
+
+Section "7b. .vscode\settings.json (task.allowAutomaticTasks + tasks folderOpen)"
+foreach ($f in $files) {
+  if ($f -notmatch '\\\.vscode\\settings\.json$') { continue }
+  $t = ReadText $f; if ($null -eq $t) { continue }
+  if ($t -match 'folderOpen') { Hit "settings.json contient une tache runOn: folderOpen : $f" }
+  elseif ($t -match '"task\.allowAutomaticTasks"\s*:\s*(true|"on")') { Warn "settings.json : task.allowAutomaticTasks actif (supprime le garde-fou de VS Code) : $f" }
 }
 
 Section "8. npm\lib\cli.js global (reecrit : ~1 Mo au lieu de quelques centaines d'octets)"
