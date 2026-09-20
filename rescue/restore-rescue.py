@@ -18,13 +18,27 @@ Usage :
   python3 restore-rescue.py --only monprojet        # cible un/des repo(s)
   python3 restore-rescue.py --bundles --only motodigo   # + commits non poussés, ciblé
   python3 restore-rescue.py --dry-run               # simulation (ne modifie rien)
+  python3 restore-rescue.py --rescue=~/backup/RESCUE_SLIM   # dossier RESCUE explicite
+  python3 restore-rescue.py --deny=un-client        # ignore les remotes contenant ce texte (repetable)
 """
 
 import os, re, sys, subprocess, tarfile
 
 HOME      = os.path.expanduser("~")
 WORKSPACE = os.path.join(HOME, "_Workspace")
-RESCUE    = os.path.join(WORKSPACE, "RESCUE_SLIM")
+
+# dossier RESCUE : --rescue=CHEMIN, sinon le bon dossier (« RESCUE_SLIM (2) » de préférence)
+RESCUE = None
+for a in sys.argv:
+    if a.startswith("--rescue="):
+        RESCUE = os.path.expanduser(a.split("=", 1)[1])
+if not RESCUE:
+    for cand in (os.path.join(WORKSPACE, "RESCUE_SLIM (2)"),
+                 os.path.join(WORKSPACE, "RESCUE_SLIM")):
+        if os.path.isdir(cand):
+            RESCUE = cand; break
+    else:
+        RESCUE = os.path.join(WORKSPACE, "RESCUE_SLIM")
 MANIFEST  = os.path.join(RESCUE, "_manifest.tsv")
 
 DRY      = "--dry-run" in sys.argv
@@ -36,7 +50,8 @@ for i, a in enumerate(sys.argv):
     elif a.startswith("--only="):
         ONLY = a.split("=", 1)[1]
 
-DENY_REMOTE = ()  # ex: ("un-client",) pour ignorer certains remotes
+# Remotes a ignorer (sous-chaine), ex. un depot client deja nettoye de son cote : --deny=un-client
+DENY_REMOTE = tuple(a.split("=", 1)[1].lower() for a in sys.argv if a.startswith("--deny="))
 
 def norm(url):
     u = (url or "").strip()
@@ -56,21 +71,20 @@ def git(cwd, *args):
     return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
 
 def build_clone_index():
+    # Trouve TOUS les dépôts git sous _Workspace, à n'importe quelle profondeur
+    # (les arborescences imbriquées type compte/projet/depot sont gérées).
     index = {}
     if not os.path.isdir(WORKSPACE):
         return index
-    for owner in sorted(os.listdir(WORKSPACE)):
-        opath = os.path.join(WORKSPACE, owner)
-        if not os.path.isdir(opath) or owner == "RESCUE_SLIM":
-            continue
-        for repo in sorted(os.listdir(opath)):
-            rpath = os.path.join(opath, repo)
-            if not os.path.isdir(os.path.join(rpath, ".git")):
-                continue
-            r = git(rpath, "remote", "get-url", "origin")
+    SKIP = {"node_modules", "RESCUE_SLIM", "vendor", "dist", ".next", ".nuxt"}
+    for dp, dn, fns in os.walk(WORKSPACE):
+        dn[:] = [d for d in dn if d not in SKIP]
+        if os.path.isdir(os.path.join(dp, ".git")):
+            r = git(dp, "remote", "get-url", "origin")
             key = norm(r.stdout.strip()) if r.returncode == 0 else None
             if key:
-                index[key] = rpath
+                index[key] = dp
+            dn[:] = []          # ne pas descendre dans un dépôt (évite les sous-modules)
     return index
 
 def read_manifest():
@@ -168,10 +182,12 @@ def main():
     mode = "SIMULATION" if DRY else "APPLICATION"
     print(f"Mode : {mode}   |   Bundles : {'OUI' if BUNDLES else 'non (léger)'}"
           + (f"   |   --only {ONLY}" if ONLY else ""))
+    print(f"RESCUE : {RESCUE}")
     print(f"Clones : {len(index)}   Entrées : {len(rows)}")
     print("=" * 68)
 
     done = nomatch = 0
+    missing = []          # (base, remote, artefacts) : ont du contenu RESCUE mais pas de clone
     for base, remote in rows:
         key = norm(remote)
         if key and any(d in key for d in DENY_REMOTE):
@@ -184,6 +200,7 @@ def main():
         clone = index.get(key)
         if not clone:
             nomatch += 1
+            missing.append((base, remote, sorted(arts)))
             continue
 
         rel = os.path.relpath(clone, WORKSPACE)
@@ -203,8 +220,15 @@ def main():
 
     print("=" * 68)
     print(f"Traités : {done}   |   sans clone : {nomatch}")
+    if missing:
+        print("\nSANS CLONE — ont une sauvegarde RESCUE mais aucun clone local")
+        print("(à cloner depuis GitHub, puis relancer restore-rescue) :")
+        for base, remote, arts in sorted(missing, key=lambda x: x[1] or ""):
+            r = remote if remote else "(dépôt LOCAL, pas de remote)"
+            print(f"  • {r}")
+            print(f"      artefacts : {'+'.join(arts)}")
     if not BUNDLES:
-        print("Commits non poussés (bundles) NON traités → relancer avec --bundles --only <repo>")
+        print("\nCommits non poussés (bundles) NON traités → relancer avec --bundles --only <repo>")
 
 if __name__ == "__main__":
     main()
